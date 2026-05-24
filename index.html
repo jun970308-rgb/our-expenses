@@ -372,14 +372,17 @@ function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const stored = JSON.parse(raw);
-      const ids = new Set(stored.map(e => e.id));
-      expenses = [...stored, ...SEED.filter(e => !ids.has(e.id))];
+      // 저장된 데이터 있으면 그대로 사용 (SEED 합치지 않음)
+      expenses = JSON.parse(raw);
     } else {
-      expenses = [...SEED];
+      // 최초 1회만 SEED 데이터로 초기화
+      expenses = JSON.parse(JSON.stringify(SEED));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
     }
-  } catch(e) { expenses = [...SEED]; }
+  } catch(e) {
+    expenses = JSON.parse(JSON.stringify(SEED));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+  }
 }
 
 function saveData() {
