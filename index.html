@@ -6,6 +6,8 @@
 <title>🏠 우리 생활비</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=DM+Serif+Display&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 :root{
@@ -304,6 +306,21 @@ body{background:var(--bg);font-family:var(--ff);color:var(--dark);font-size:14px
 // 데이터 & 설정
 // ══════════════════════════════════════════════════════
 const STORAGE_KEY = 'couple_shared_v1';
+
+// ── Firebase 초기화 ──────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyCS3zn0ArZGBgiAPmcVWzQKZhx3kJ2Sdv0",
+  authDomain: "love-a268d.firebaseapp.com",
+  databaseURL: "https://love-a268d-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "love-a268d",
+  storageBucket: "love-a268d.firebasestorage.app",
+  messagingSenderId: "201252146380",
+  appId: "1:201252146380:web:d14d05d22d46e0e3fdc669",
+  measurementId: "G-Z3W9SD963N"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const expRef = db.ref('expenses');
 const WARN = 350000;
 
 const SEED = [
@@ -369,49 +386,33 @@ let fPerson = '';
 // 스토리지 (공유)
 // ══════════════════════════════════════════════════════
 function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      // 저장된 데이터 있으면 그대로 사용 (SEED 합치지 않음)
-      expenses = JSON.parse(raw);
+  // Firebase 실시간 리스너 — 상대방이 추가/삭제해도 자동 반영
+  expRef.on('value', snapshot => {
+    const val = snapshot.val();
+    if (val) {
+      expenses = Object.values(val);
     } else {
-      // 최초 1회만 SEED 데이터로 초기화
+      // 최초 1회 SEED 데이터 올리기
       expenses = JSON.parse(JSON.stringify(SEED));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+      saveData();
     }
-  } catch(e) {
-    expenses = JSON.parse(JSON.stringify(SEED));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
-  }
+    document.getElementById('loading').style.display = 'none';
+    renderAll();
+  });
 }
 
 function saveData() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses)); } catch(e) {}
+  // 배열을 객체로 변환해서 Firebase에 저장
+  const obj = {};
+  expenses.forEach(e => { obj[e.id] = e; });
+  expRef.set(obj);
 }
 
 function syncNow(quiet = false) {
   const dot = document.getElementById('sync-dot');
   const lbl = document.getElementById('sync-label');
-  dot.classList.add('syncing');
-  // localStorage는 같은 기기 내 즉시 동기화
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const remote = JSON.parse(raw);
-      const ids = new Set(expenses.map(e => e.id));
-      const merged = [...expenses];
-      let added = 0;
-      remote.forEach(e => { if (!ids.has(e.id)) { merged.push(e); added++; } });
-      if (added > 0) {
-        expenses = merged;
-        saveData();
-        renderAll();
-        if (!quiet) showToast(`${added}개 새 항목 동기화됨 ✓`);
-      } else {
-        if (!quiet) showToast('저장됨 ✓');
-      }
-    }
-  } catch(e) {}
+  // Firebase 실시간 동기화 중 — 자동으로 반영됨
+  if (!quiet) showToast('실시간 동기화 중 ✓');
   dot.classList.remove('syncing');
   lbl.textContent = now();
 }
@@ -922,10 +923,8 @@ function showToast(msg) {
 // 초기화
 // ══════════════════════════════════════════════════════
 (() => {
-  loadData();
-  document.getElementById('loading').style.display = 'none';
   document.getElementById('sync-label').textContent = now();
-  renderAll();
+  loadData(); // Firebase 리스너 등록 — 데이터 오면 자동 렌더링
 })();
 </script>
 </body>
