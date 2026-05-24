@@ -260,7 +260,7 @@ body{background:var(--bg);font-family:var(--ff);color:var(--dark);font-size:14px
     <div class="preset-grid" id="presets"></div>
     <input type="text" id="f-item" class="form-input" placeholder="직접 입력…">
     <label class="form-label">금액 (원)</label>
-    <input type="number" inputmode="numeric" id="f-amount" class="form-input amount-input" placeholder="0">
+    <input type="text" inputmode="numeric" id="f-amount" class="form-input amount-input" placeholder="0">
     <label class="form-label">결제 수단</label>
     <div class="pay-grid">
       <button class="pay-btn active-coral" id="pay-chung" onclick="setPay('card_chung')">💳<br>청호나이스</button>
@@ -291,7 +291,10 @@ body{background:var(--bg);font-family:var(--ff);color:var(--dark);font-size:14px
   <div class="detail-header">
     <button class="back" onclick="closeDetail()">‹</button>
     <span style="color:#F5EFE6;font-size:15px;font-weight:700">지출 상세</span>
-    <button class="del" onclick="deleteExpense()">삭제</button>
+    <div style="display:flex;gap:12px;align-items:center">
+      <button style="background:none;border:none;color:#AAA;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--ff)" onclick="editExpense()">수정</button>
+      <button class="del" onclick="deleteExpense()">삭제</button>
+    </div>
   </div>
   <div class="detail-body" id="detail-body"></div>
 </div>
@@ -365,42 +368,44 @@ let fPerson = '';
 // ══════════════════════════════════════════════════════
 // 스토리지 (공유)
 // ══════════════════════════════════════════════════════
-async function loadData() {
+function loadData() {
   try {
-    const r = await window.storage.get(STORAGE_KEY, true);
-    if (r && r.value) {
-      const stored = JSON.parse(r.value);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const stored = JSON.parse(raw);
       const ids = new Set(stored.map(e => e.id));
       expenses = [...stored, ...SEED.filter(e => !ids.has(e.id))];
     } else {
       expenses = [...SEED];
-      await window.storage.set(STORAGE_KEY, JSON.stringify(expenses), true);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
     }
   } catch(e) { expenses = [...SEED]; }
 }
 
-async function saveData() {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(expenses), true); } catch(e) {}
+function saveData() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses)); } catch(e) {}
 }
 
-async function syncNow(quiet = false) {
+function syncNow(quiet = false) {
   const dot = document.getElementById('sync-dot');
   const lbl = document.getElementById('sync-label');
   dot.classList.add('syncing');
+  // localStorage는 같은 기기 내 즉시 동기화
   try {
-    const r = await window.storage.get(STORAGE_KEY, true);
-    if (r && r.value) {
-      const remote = JSON.parse(r.value);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const remote = JSON.parse(raw);
       const ids = new Set(expenses.map(e => e.id));
       const merged = [...expenses];
       let added = 0;
       remote.forEach(e => { if (!ids.has(e.id)) { merged.push(e); added++; } });
       if (added > 0) {
         expenses = merged;
+        saveData();
         renderAll();
         if (!quiet) showToast(`${added}개 새 항목 동기화됨 ✓`);
       } else {
-        if (!quiet) showToast('이미 최신 상태예요 ✓');
+        if (!quiet) showToast('저장됨 ✓');
       }
     }
   } catch(e) {}
@@ -413,6 +418,7 @@ function now() {
 }
 
 // 30초마다 자동 동기화
+// 30초마다 저장 상태 확인
 setInterval(() => syncNow(true), 30000);
 
 // ══════════════════════════════════════════════════════
@@ -441,14 +447,10 @@ function renderDash() {
   const overC  = chungT >= WARN;
   const overL  = lgT >= WARN;
 
-  // 차트: 해당 연도 1월~현재까지 (미래 달 제외)
-  const today = new Date().toISOString().slice(0,7);
+  // 차트: 해당 연도 1~12월 전부
   const yr = currentMonth.slice(0,4);
-  const todayYr = parseInt(today.slice(0,4));
-  const chartYr = parseInt(yr);
-  const maxM = chartYr < todayYr ? 12 : chartYr === todayYr ? parseInt(today.slice(5)) : 0;
   const chartData = [];
-  for (let m = 1; m <= maxM; m++) {
+  for (let m = 1; m <= 12; m++) {
     const mk = `${yr}-${String(m).padStart(2,'0')}`;
     const me = expenses.filter(e=>mKey(e.date)===mk);
     const tot = me.reduce((s,e)=>s+e.amt,0);
@@ -495,12 +497,22 @@ function renderDash() {
 
     <!-- 개인 정산 -->
     ${persT>0?`
-    <div class="refund-banner">
-      <div class="left">
-        <div class="title">↩ 개인 정산 예정</div>
-        <div class="detail">${mExp.filter(e=>e.p).map(e=>`${e.who||'??'} ${fmt(e.amt)}원`).join(' · ')}</div>
+    <div style="background:var(--green-light);border-radius:18px;padding:18px 18px;margin-bottom:12px;border:1px solid #AADDC0">
+      <div style="font-size:12px;color:var(--green);font-weight:700;margin-bottom:14px;letter-spacing:.3px">↩ 개인 정산 예정</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        ${['준서','예림'].map(name=>{
+          const sum = mExp.filter(e=>e.p&&e.who===name).reduce((s,e)=>s+e.amt,0);
+          return sum>0?`
+          <div style="background:rgba(255,255,255,.6);border-radius:12px;padding:12px 14px">
+            <div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px">${name}</div>
+            <div style="font-size:20px;font-weight:900;color:#1E6640;letter-spacing:-.5px">${fmt(sum)}<span style="font-size:12px;font-weight:400">원</span></div>
+          </div>`:'';
+        }).join('')}
       </div>
-      <div class="amount">${fmt(persT)}원</div>
+      <div style="background:rgba(255,255,255,.8);border-radius:12px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px;color:var(--green);font-weight:700">합계</span>
+        <span style="font-size:24px;font-weight:900;color:#1E6640;letter-spacing:-.5px">${fmt(persT)}<span style="font-size:13px;font-weight:400">원</span></span>
+      </div>
     </div>`:''}
 
     <!-- 차트 -->
@@ -597,11 +609,10 @@ function renderYear() {
   const yr = currentMonth.slice(0,4);
   const today = new Date().toISOString().slice(0,7);
 
-  // 해당 연도의 1~12월 (오늘 이전까지)
+  // 해당 연도 1~12월 전부
   const months = [];
   for(let m=1;m<=12;m++) {
-    const mk = `${yr}-${String(m).padStart(2,'0')}`;
-    if(mk <= today || expenses.some(e=>mKey(e.date)===mk)) months.push(mk);
+    months.push(`${yr}-${String(m).padStart(2,'0')}`);
   }
 
   const stats = months.map(mk=>{
@@ -725,7 +736,12 @@ function openAdd() {
   document.getElementById('add-sheet').classList.add('open');
 
   document.getElementById('f-item').addEventListener('input', updateSubmitBtn);
-  document.getElementById('f-amount').addEventListener('input', updateSubmitBtn);
+  document.getElementById('f-amount').addEventListener('input', function() {
+    const raw = this.value.replace(/[^0-9]/g,'');
+    if(raw) this.value = parseInt(raw).toLocaleString('ko-KR');
+    else this.value = '';
+    updateSubmitBtn();
+  });
 }
 function closeAdd() { document.getElementById('add-sheet').classList.remove('open'); }
 
@@ -755,22 +771,26 @@ function updatePersonalUI() {
   title.style.color = fPersonal?'var(--green)':'var(--dark)';
   sec.style.display = fPersonal?'block':'none';
   document.querySelectorAll('.person-btn').forEach(b=>b.classList.remove('active'));
+  updateSubmitBtn();
 }
 function setPerson(p) {
   fPerson=p;
   document.getElementById('person-js').className='person-btn'+(p==='준서'?' active':'');
   document.getElementById('person-yr').className='person-btn'+(p==='예림'?' active':'');
+  updateSubmitBtn();
 }
 function updateSubmitBtn() {
   const item = document.getElementById('f-item').value.trim();
-  const amt = document.getElementById('f-amount').value;
+  const rawAmt = document.getElementById('f-amount').value.replace(/,/g,'');
   const btn = document.getElementById('submit-btn');
-  const ok = item && amt && parseInt(amt)>0;
+  const whoOk = !fPersonal || fPerson !== '';
+  const ok = item && rawAmt && parseInt(rawAmt)>0 && whoOk;
   btn.className = 'submit-btn '+(ok?'ready':'disabled');
+  btn.textContent = (fPersonal && !fPerson) ? '누구 지출인지 선택해주세요' : '추가하기';
 }
-async function submitExpense() {
+function submitExpense() {
   const item = document.getElementById('f-item').value.trim();
-  const amt = parseInt(document.getElementById('f-amount').value);
+  const amt = parseInt(document.getElementById('f-amount').value.replace(/,/g,''));
   if(!item || !amt) return;
   const entry = {
     id: Date.now().toString(),
@@ -780,7 +800,7 @@ async function submitExpense() {
     note: document.getElementById('f-note').value.trim()
   };
   expenses.unshift(entry);
-  await saveData();
+  saveData();
   closeAdd();
   renderAll();
   showToast('추가됐어요 ✓');
@@ -811,14 +831,78 @@ function openDetail(id) {
   document.getElementById('detail-sheet').classList.add('open');
 }
 function closeDetail() { document.getElementById('detail-sheet').classList.remove('open'); }
-async function deleteExpense() {
-  if(!selectedId) return;
-  if(!confirm('이 항목을 삭제할까요?')) return;
-  expenses = expenses.filter(e=>e.id!==selectedId);
-  await saveData();
+
+function editExpense() {
+  const e = expenses.find(x=>x.id===selectedId);
+  if(!e) return;
   closeDetail();
-  renderAll();
-  showToast('삭제됐어요');
+  // 폼에 기존 데이터 채우기
+  setTimeout(()=>{
+    document.getElementById('presets').innerHTML = PRESETS.map(p=>
+      `<button class="preset-btn${e.item===p.l?' active':''}" onclick="selectPreset('${p.l}')">${p.i} ${p.l}</button>`
+    ).join('');
+    document.getElementById('f-date').value = e.date;
+    document.getElementById('f-item').value = e.item;
+    document.getElementById('f-amount').value = e.amt.toLocaleString('ko-KR');
+    document.getElementById('f-note').value = e.note;
+    fPay = e.pay; fPersonal = e.p; fPerson = e.who;
+    updatePayUI(); updatePersonalUI();
+    if(e.who) {
+      document.getElementById('person-js').className='person-btn'+(e.who==='준서'?' active':'');
+      document.getElementById('person-yr').className='person-btn'+(e.who==='예림'?' active':'');
+    }
+    // 수정 모드: 저장 시 기존 항목 교체
+    const btn = document.getElementById('submit-btn');
+    btn.textContent = '수정 저장하기';
+    btn.onclick = () => {
+      const item = document.getElementById('f-item').value.trim();
+      const amt = parseInt(document.getElementById('f-amount').value.replace(/,/g,''));
+      if(!item||!amt) return;
+      const idx = expenses.findIndex(x=>x.id===selectedId);
+      if(idx>-1) {
+        expenses[idx] = { ...expenses[idx], date:document.getElementById('f-date').value, item, amt, pay:fPay, p:fPersonal, who:fPerson, note:document.getElementById('f-note').value.trim() };
+        saveData(); closeAdd(); renderAll(); showToast('수정됐어요 ✓');
+      }
+      // 버튼 원상복구
+      btn.onclick = submitExpense;
+    };
+    document.getElementById('add-sheet').classList.add('open');
+    document.getElementById('f-item').addEventListener('input', updateSubmitBtn);
+    document.getElementById('f-amount').addEventListener('input', function() {
+      const raw = this.value.replace(/[^0-9]/g,'');
+      if(raw) this.value = parseInt(raw).toLocaleString('ko-KR');
+      else this.value = '';
+      updateSubmitBtn();
+    });
+    updateSubmitBtn();
+  }, 300);
+}
+function deleteExpense() {
+  if(!selectedId) return;
+  showConfirm('이 항목을 삭제할까요?', () => {
+    expenses = expenses.filter(e=>e.id!==selectedId);
+    saveData();
+    closeDetail();
+    renderAll();
+    showToast('삭제됐어요 🗑');
+  });
+}
+
+function showConfirm(msg, onOk) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:20px;padding:24px 20px;width:100%;max-width:300px;text-align:center;font-family:'Noto Sans KR',sans-serif">
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px;color:#1E1A17">${msg}</div>
+      <div style="font-size:13px;color:#A09890;margin-bottom:20px">삭제 후 복구가 안 돼요</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button id="confirm-cancel" style="padding:12px;border-radius:12px;border:1.5px solid #EAE3D8;background:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:'Noto Sans KR',sans-serif;color:#A09890">취소</button>
+        <button id="confirm-ok" style="padding:12px;border-radius:12px;border:none;background:#D63030;color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:'Noto Sans KR',sans-serif">삭제</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#confirm-cancel').onclick = () => document.body.removeChild(overlay);
+  overlay.querySelector('#confirm-ok').onclick = () => { document.body.removeChild(overlay); onOk(); };
 }
 
 // ══════════════════════════════════════════════════════
@@ -834,8 +918,8 @@ function showToast(msg) {
 // ══════════════════════════════════════════════════════
 // 초기화
 // ══════════════════════════════════════════════════════
-(async () => {
-  await loadData();
+(() => {
+  loadData();
   document.getElementById('loading').style.display = 'none';
   document.getElementById('sync-label').textContent = now();
   renderAll();
