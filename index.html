@@ -306,6 +306,7 @@ body{background:var(--bg);font-family:var(--ff);color:var(--dark);font-size:14px
 // 데이터 & 설정
 // ══════════════════════════════════════════════════════
 const STORAGE_KEY = 'couple_shared_v1';
+const SETTLED_KEY = 'couple_settled_v1';  // 정산 완료 기록
 
 // ── Firebase 초기화 ──────────────────────────────────
 const firebaseConfig = {
@@ -374,8 +375,10 @@ let expenses = [];
 let currentMonth = new Date().toISOString().slice(0,7);
 let currentTab = 'dash';
 let currentFilter = 'all';
+let personalSub = 'all';  // 개인 서브탭: all | 준서 | 예림
 let selectedId = null;
 let chartInstance = null;
+let settled = {};  // { 'YYYY-MM_준서': 금액, 'YYYY-MM_예림': 금액 }
 
 // ── form 상태 ───────────────────────────────────────────
 let fPay = 'card_chung';
@@ -386,19 +389,7 @@ let fPerson = '';
 // 스토리지 (공유)
 // ══════════════════════════════════════════════════════
 function loadData() {
-  // Firebase 실시간 리스너 — 상대방이 추가/삭제해도 자동 반영
-  expRef.on('value', snapshot => {
-    const val = snapshot.val();
-    if (val) {
-      expenses = Object.values(val);
-    } else {
-      // 최초 1회 SEED 데이터 올리기
-      expenses = JSON.parse(JSON.stringify(SEED));
-      saveData();
-    }
-    document.getElementById('loading').style.display = 'none';
-    renderAll();
-  });
+  // init()에서 리스너 등록하므로 여기선 아무것도 안 함
 }
 
 function saveData() {
@@ -443,13 +434,18 @@ function updateMonthLabel() {
 // ── 대시보드 ────────────────────────────────────────────
 function renderDash() {
   const mExp = expenses.filter(e => mKey(e.date) === currentMonth);
-  const chungT = mExp.filter(e=>e.pay==='card_chung').reduce((s,e)=>s+e.amt,0);
-  const lgT    = mExp.filter(e=>e.pay==='card_lg').reduce((s,e)=>s+e.amt,0);
-  const persT  = mExp.filter(e=>e.p).reduce((s,e)=>s+e.amt,0);
-  const totalT = chungT + lgT;
-  const netT   = totalT - persT;
-  const overC  = chungT >= WARN;
-  const overL  = lgT >= WARN;
+  const chungT     = mExp.filter(e=>e.pay==='card_chung').reduce((s,e)=>s+e.amt,0);
+  const lgT        = mExp.filter(e=>e.pay==='card_lg').reduce((s,e)=>s+e.amt,0);
+  const persT      = mExp.filter(e=>e.p).reduce((s,e)=>s+e.amt,0);
+  // 카드별 개인 차감
+  const chungPers  = mExp.filter(e=>e.p&&e.pay==='card_chung').reduce((s,e)=>s+e.amt,0);
+  const lgPers     = mExp.filter(e=>e.p&&e.pay==='card_lg').reduce((s,e)=>s+e.amt,0);
+  const chungNet   = chungT - chungPers;  // 청호나이스 실제 커플 금액
+  const lgNet      = lgT - lgPers;        // LG카드 실제 커플 금액
+  const totalT     = chungT + lgT;
+  const netT       = totalT - persT;      // 전체 실제 커플 금액
+  const overC      = chungNet >= WARN;
+  const overL      = lgNet >= WARN;
 
   // 차트: 해당 연도 1~12월 전부
   const yr = currentMonth.slice(0,4);
@@ -480,19 +476,21 @@ function renderDash() {
       <div class="hero-grid">
         <div class="hero-chip">
           <div class="chip-label">💳 청호나이스</div>
-          <div class="chip-val ${overC?'warn':''}">${fmt(chungT)}원</div>
+          <div class="chip-val ${overC?'warn':''}">${fmt(chungNet)}원</div>
+          ${chungPers>0?`<div style="color:#888;font-size:9px;margin-top:1px">전체 ${fmt(chungT)}원 · 개인 ${fmt(chungPers)}원 차감</div>`:''}
           ${overC?'<div class="chip-warn">⚠ 35만원 초과</div>':''}
           <div class="budget-bar">
-            <div class="budget-bar-track"><div class="budget-bar-fill" style="width:${Math.min(chungT/WARN*100,100)}%;background:${overC?'#E05050':'#C4622E'}"></div></div>
+            <div class="budget-bar-track"><div class="budget-bar-fill" style="width:${Math.min(chungNet/WARN*100,100)}%;background:${overC?'#E05050':'#C4622E'}"></div></div>
             <div class="budget-bar-label"><span>0</span><span>35만원</span></div>
           </div>
         </div>
         <div class="hero-chip">
           <div class="chip-label">💳 LG 카드</div>
-          <div class="chip-val ${overL?'warn':''}">${fmt(lgT)}원</div>
+          <div class="chip-val ${overL?'warn':''}">${fmt(lgNet)}원</div>
+          ${lgPers>0?`<div style="color:#888;font-size:9px;margin-top:1px">전체 ${fmt(lgT)}원 · 개인 ${fmt(lgPers)}원 차감</div>`:''}
           ${overL?'<div class="chip-warn">⚠ 35만원 초과</div>':''}
           <div class="budget-bar">
-            <div class="budget-bar-track"><div class="budget-bar-fill" style="width:${Math.min(lgT/WARN*100,100)}%;background:${overL?'#E05050':'#3A7FD8'}"></div></div>
+            <div class="budget-bar-track"><div class="budget-bar-fill" style="width:${Math.min(lgNet/WARN*100,100)}%;background:${overL?'#E05050':'#3A7FD8'}"></div></div>
             <div class="budget-bar-label"><span>0</span><span>35만원</span></div>
           </div>
         </div>
@@ -500,24 +498,7 @@ function renderDash() {
     </div>
 
     <!-- 개인 정산 -->
-    ${persT>0?`
-    <div style="background:var(--green-light);border-radius:18px;padding:18px 18px;margin-bottom:12px;border:1px solid #AADDC0">
-      <div style="font-size:12px;color:var(--green);font-weight:700;margin-bottom:14px;letter-spacing:.3px">↩ 개인 정산 예정</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-        ${['준서','예림'].map(name=>{
-          const sum = mExp.filter(e=>e.p&&e.who===name).reduce((s,e)=>s+e.amt,0);
-          return sum>0?`
-          <div style="background:rgba(255,255,255,.6);border-radius:12px;padding:12px 14px">
-            <div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px">${name}</div>
-            <div style="font-size:20px;font-weight:900;color:#1E6640;letter-spacing:-.5px">${fmt(sum)}<span style="font-size:12px;font-weight:400">원</span></div>
-          </div>`:'';
-        }).join('')}
-      </div>
-      <div style="background:rgba(255,255,255,.8);border-radius:12px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:13px;color:var(--green);font-weight:700">합계</span>
-        <span style="font-size:24px;font-weight:900;color:#1E6640;letter-spacing:-.5px">${fmt(persT)}<span style="font-size:13px;font-weight:400">원</span></span>
-      </div>
-    </div>`:''}
+    ${persT>0 ? renderSettleSection(mExp, currentMonth) : ''}
 
     <!-- 차트 -->
     ${chartData.length>0?`
@@ -589,21 +570,49 @@ function renderDash() {
 function renderList() {
   const mExp = expenses.filter(e=>mKey(e.date)===currentMonth);
   const filters = [['all','전체'],['card_chung','청호나이스'],['card_lg','LG카드'],['personal','개인']];
-  const items = mExp.filter(e=>
-    currentFilter==='all'?true:
-    currentFilter==='personal'?e.p:
-    e.pay===currentFilter
-  ).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
+  const items = mExp.filter(e=>{
+    if (currentFilter==='all') return true;
+    if (currentFilter==='personal') {
+      if (!e.p) return false;
+      if (personalSub==='all') return true;
+      return e.who === personalSub;
+    }
+    return e.pay===currentFilter;
+  }).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
 
   const totalAmt = mExp.reduce((s,e)=>s+e.amt,0);
+  const chungSum = mExp.filter(e=>e.pay==='card_chung').reduce((s,e)=>s+e.amt,0);
+  const lgSum    = mExp.filter(e=>e.pay==='card_lg').reduce((s,e)=>s+e.amt,0);
+  const persSum  = mExp.filter(e=>e.p).reduce((s,e)=>s+e.amt,0);
   document.getElementById('list-content').innerHTML = `
     <div class="section-header">
       <span class="section-title">지출 내역</span>
-      <span class="section-meta">${mExp.length}건 · ${fmt(totalAmt)}원</span>
+      <span class="section-meta">${mExp.length}건</span>
+    </div>
+    <!-- 카드별 소계 -->
+    <div style="background:var(--surface);border-radius:16px;padding:14px 16px;margin-bottom:12px;border:1px solid var(--lite)">
+      ${[
+        {label:'💳 청호나이스', val:chungSum, col:'#C4622E'},
+        {label:'💳 LG 카드',   val:lgSum,    col:'#2B5FB8'},
+        {label:'👤 개인 지출', val:persSum,  col:'#2E8B57'},
+      ].map(r=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--lite)">
+          <span style="font-size:13px;color:var(--muted);font-weight:500">${r.label}</span>
+          <span style="font-size:15px;font-weight:700;color:${r.col}">${fmt(r.val)}원</span>
+        </div>
+      `).join('')}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;margin-top:2px">
+        <span style="font-size:13px;font-weight:700">합계</span>
+        <span style="font-size:17px;font-weight:900;color:var(--dark)">${fmt(totalAmt)}원</span>
+      </div>
     </div>
     <div class="filter-row">
       ${filters.map(([k,l])=>`<button class="chip ${currentFilter===k?'active':''}" onclick="setFilter('${k}')">${l}</button>`).join('')}
     </div>
+    ${currentFilter==='personal' ? `
+    <div class="filter-row" style="margin-top:-4px">
+      ${[['all','전체'],['준서','준서'],['예림','예림']].map(([k,l])=>`<button class="chip ${personalSub===k?'active':''}" style="font-size:11px;padding:4px 11px" onclick="setPersonalSub('${k}')">${l}</button>`).join('')}
+    </div>` : ''}
     ${items.length===0?'<div class="empty">내역이 없어요 🌿</div>':items.map(e=>expenseRow(e)).join('')}
   `;
 }
@@ -679,15 +688,21 @@ function goMonth(mk) {
 // ── 공통 항목 렌더 ───────────────────────────────────────
 function expenseRow(e) {
   const payLabel = e.pay==='card_chung'?'청호나이스':e.pay==='card_lg'?'LG카드':'현금';
+  const itemKey = mKey(e.date)+'_item_'+e.id;
+  const isSettled = e.p && (settled[itemKey] === true);
   return `
     <div class="expense-item ${e.p?'personal':''}" onclick="openDetail('${e.id}')">
       <div class="expense-icon">${gIcon(e.item)}</div>
       <div class="expense-info">
         <div class="expense-name">
           ${e.item}
-          ${e.p?`<span class="personal-badge">${e.who||'개인'}</span>`:''}
+          ${e.p ? (isSettled
+            ? '<span class="personal-badge" style="background:#B8E8CA;color:#1D6E3E">✓ 정산완료</span>'
+            : `<span class="personal-badge">${e.who||'개인'}</span>`)
+          : ''}
         </div>
         <div class="expense-meta">${e.date.slice(5).replace('-','/')} · ${payLabel}${e.note?` · ${e.note}`:''}</div>
+        ${e.p && !isSettled ? `<button onclick="event.stopPropagation();settleItem('${e.id}','${e.who||''}',${e.amt})" style="margin-top:6px;background:#2E8B57;color:#fff;border:none;border-radius:10px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--ff)">정산하기</button>` : ''}
       </div>
       <div class="expense-amount">
         <div class="amount ${e.p?'personal':''}">${fmt(e.amt)}원</div>
@@ -717,7 +732,18 @@ function changeMonth(dir) {
   renderAll();
 }
 
+function setPersonalSub(s) {
+  personalSub = s;
+  renderList();
+}
+
 function setFilter(f) {
+  if (f !== 'personal') personalSub = 'all';
+  currentFilter = f;
+  renderList();
+}
+
+function setFilter_OLD(f) {
   currentFilter = f;
   renderList();
 }
@@ -881,6 +907,73 @@ function editExpense() {
     updateSubmitBtn();
   }, 300);
 }
+function settleItemById(btn) {
+  var id = btn.getAttribute('data-id');
+  var who = btn.getAttribute('data-who');
+  var amt = parseInt(btn.getAttribute('data-amt'));
+  settleItem(id, who, amt);
+}
+
+function settleItem(id, who, amt) {
+  var itemKey = mKey(expenses.find(function(e){return e.id===id;}).date)+'_item_'+id;
+  if (settled[itemKey]) { showToast('이미 정산됐어요 ✓'); return; }
+  showConfirm((who||'개인')+' '+fmt(amt)+'원 정산 완료할까요?', function() {
+    firebase.database().ref('settled/'+itemKey).set(true);
+    showToast('정산 완료 ✓');
+  });
+}
+
+function renderSettleSection(mExp, mk) {
+  // 준서/예림 각각 합계 + 미정산 금액만 심플하게
+  var rows = ['준서','예림'].map(function(name) {
+    var items = mExp.filter(function(e){return e.p && e.who===name;});
+    if (!items.length) return '';
+    var sum = items.reduce(function(s,e){return s+e.amt;},0);
+    var settledSum = items.filter(function(e){return settled[mk+'_item_'+e.id]===true;}).reduce(function(s,e){return s+e.amt;},0);
+    var remaining = sum - settledSum;
+    var allDone = remaining <= 0;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(0,0,0,.07)">'
+      + '<div style="font-size:13px;font-weight:700;color:#1E6640">'+name+'</div>'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + (allDone
+        ? '<span style="font-size:11px;background:#2E8B57;color:#fff;padding:3px 10px;border-radius:10px;font-weight:700">✓ 완료</span>'
+        : '<span style="font-size:11px;color:#888">미정산 <b style="color:#1E6640">'+fmt(remaining)+'원</b></span>')
+      + '<span style="font-size:16px;font-weight:900;color:#1E6640">'+fmt(sum)+'원</span>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+
+  var persItems = mExp.filter(function(e){return e.p;});
+  var totalPers = persItems.reduce(function(s,e){return s+e.amt;},0);
+  var unsettledTotal = persItems.filter(function(e){return !settled[mk+'_item_'+e.id];}).reduce(function(s,e){return s+e.amt;},0);
+
+  return '<div style="background:var(--green-light);border-radius:18px;padding:16px 18px;margin-bottom:12px;border:1px solid #AADDC0">'
+    + '<div style="font-size:12px;color:var(--green);font-weight:700;margin-bottom:4px;letter-spacing:.3px">↩ 개인 정산 현황</div>'
+    + '<div style="font-size:11px;color:#888;margin-bottom:12px">내역 탭에서 항목별 정산하기 가능</div>'
+    + '<div style="background:rgba(255,255,255,.7);border-radius:12px;padding:4px 14px">'
+    + rows
+    + '</div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(0,0,0,.07)">'
+    + '<span style="font-size:13px;color:var(--green);font-weight:700">미정산 합계</span>'
+    + '<span style="font-size:22px;font-weight:900;color:#1E6640;letter-spacing:-.5px">'+fmt(unsettledTotal)+'<span style="font-size:13px;font-weight:400">원</span></span>'
+    + '</div>'
+    + '</div>';
+}
+
+function settlePerson(btn) {
+  var name = btn.getAttribute('data-name');
+  var amount = parseInt(btn.getAttribute('data-sum'));
+  var mk = currentMonth;
+  var key = mk + '_' + name;
+  var already = settled[key] || 0;
+  var remaining = amount - already;
+  if (remaining <= 0) { showToast('이미 정산 완료됐어요 ✓'); return; }
+  showConfirm(name + ' ' + fmt(remaining) + '원 정산 완료 처리할까요?', function() {
+    firebase.database().ref('settled/' + key).set(amount);
+    showToast(name + ' 정산 완료 ✓');
+  });
+}
+
 function deleteExpense() {
   if(!selectedId) return;
   showConfirm('이 항목을 삭제할까요?', () => {
@@ -924,7 +1017,35 @@ function showToast(msg) {
 // ══════════════════════════════════════════════════════
 (() => {
   document.getElementById('sync-label').textContent = now();
-  loadData(); // Firebase 리스너 등록 — 데이터 오면 자동 렌더링
+
+  let expLoaded = false;
+  let settledLoaded = false;
+
+  // settled 리스너
+  firebase.database().ref('settled').on('value', snap => {
+    settled = snap.val() || {};
+    settledLoaded = true;
+    if (expLoaded) {
+      document.getElementById('loading').style.display = 'none';
+      renderAll();
+    }
+  });
+
+  // expenses 리스너 (expRef = db.ref('expenses'))
+  expRef.on('value', snapshot => {
+    const val = snapshot.val();
+    if (val) {
+      expenses = Object.values(val);
+    } else {
+      expenses = JSON.parse(JSON.stringify(SEED));
+      saveData();
+    }
+    expLoaded = true;
+    if (settledLoaded) {
+      document.getElementById('loading').style.display = 'none';
+      renderAll();
+    }
+  });
 })();
 </script>
 </body>
